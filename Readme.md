@@ -22,3 +22,19 @@ docker stop 3330(container_id)
 docker start 3330
 
 docker images
+
+## Run the new OOP FastAPI app locally
+
+1. Install dependencies:
+
+   - pip install -r requirements.txt
+
+2. Start the API (uvicorn):
+
+   - uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+
+3. API docs:
+
+   - http://localhost:8080/docs
+
+Endpoints are namespaced under `/api/v1`.
