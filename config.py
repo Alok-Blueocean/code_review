@@ -10,4 +10,9 @@ LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 gemini_api_key = os.getenv("gemini_api_key")
 groq_api_key = os.getenv("groq_api_key")
-model_id = 'Gemma2-9b-It'
+model_id = 'llama-3.1-8b-instant'#Gemma2-9b-It'
+LANGCHAIN_DEBUG = "false"
+LANGCHAIN_VERBOSE = "false"
+
+os.environ["LANGCHAIN_DEBUG"] = "false"
+os.environ["LANGCHAIN_VERBOSE"] = "false"
