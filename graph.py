@@ -1,4 +1,4 @@
-from langgrap.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, START, END
 from states import MessageState
 from nodes import *
 from langgraph.types import interrupt,Command
@@ -101,5 +101,6 @@ graph.add_edge("sql_node", END)
 graph.add_edge("fallback_node", END)
 
 config = {"configurable":{"thread_id":"2"}}
-app = graph.compile(checkpointer=InMemorySaver())
+graph_app = graph.compile(checkpointer=InMemorySaver())
 
+# graph_app.invoke({"question": "Avoid using the GROUP BY clause"}, config= {"configurable":{"thread_id":"2"}})
