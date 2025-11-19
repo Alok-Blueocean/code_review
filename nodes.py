@@ -5,6 +5,11 @@ from langchain.schema import SystemMessage, HumanMessage, AIMessage
 from states import MessageState
 from langchain.prompts import PromptTemplate
 from chains import model
+from vectorstore import chroma, sql_chroma
+from chains import model_chain, sql_model_chain, router_chain
+from langgraph.types import Command, interrupt
+
+
 
 SYSTEM_PROMPT = (
     "Be concise and include examples when helpful."
@@ -54,11 +59,11 @@ def get_request_language(state: MessageState) -> MessageState:
     Determine the programming language of the request based on the user's question.
     """
 
-    print("get request language ....."+str(state))
+    # print("get request language ....."+str(state))
     print("2...........")
     parser = PydanticOutputParser(pydantic_object=MessageState)
     format_instructions = parser.get_format_instructions()
-    print("Format instructions:"+str(format_instructions))
+    # print("Format instructions:"+str(format_instructions))
     prompt = """
     Classify the following question as either "JPA" if it is asking about Java code, "SQL" if it is asking about SQL code, or "unknown" if it is not clear.
     Also provide a confidence score between 0 and 1 for your classification.
@@ -104,7 +109,8 @@ def clarify_query_language(state: MessageState) -> MessageState:
     #     "max_retries": state.max_retries
     # }
     # print("Asking user for clarification:", clarify_prompt)
-    raw = input("User response: ")
+    # raw = input("User response: ")
+    raw = interrupt(clarify_prompt)
     # refined = interrupt(payload)
     # print(refined)
     # raw = refined.payload.get("user_response","")
@@ -126,8 +132,7 @@ def clarify_query_language(state: MessageState) -> MessageState:
     state.awaiting_clarify = False
     return state
     
-from langchain.chains import LLMChain
-from langchain_core.output_parsers import PydanticOutputParser
+
 def get_request_type(state: MessageState) -> MessageState:
     """
     Determine the programming language of the request based on the user's question.
@@ -174,7 +179,8 @@ def clarify_query_type(state: MessageState) -> MessageState:
 - Individual Issue""")
     state.clarify_prompt = clarify_prompt
     print("Asking user for clarification:", clarify_prompt)
-    raw = input("User response: ")
+    # raw = input("User response: ")
+    raw = interrupt(clarify_prompt)
     # payload = {
     #     "prompt":clarify_prompt,
     #     "retry_count": state.retry_count,
@@ -202,9 +208,9 @@ def clarify_query_type(state: MessageState) -> MessageState:
     return state
     
 def route_query_node(state: MessageState) -> MessageState:
-    if state.query_type_score is None or state.query_type_score < 0.7:
+    if state.query_type_score is None or state.query_type_score < 0.9:
         return "clarify_query_type"
-    if state.query_type_score is None or state.query_type_score >= 0.7:
+    if state.query_type_score is None or state.query_type_score >= 0.9:
         return "get_request_language"
     if state.awaiting_clarify:
         return "awaiting"
@@ -212,9 +218,9 @@ def route_query_node(state: MessageState) -> MessageState:
         return "fallback_node"
 
 def route_language_node(state: MessageState) -> MessageState:
-    if state.query_language_score is None or state.query_language_score < 0.7:
+    if state.query_language_score is None or state.query_language_score < 0.9:
         return "clarify_query_language"
-    if state.query_language_score is None or state.query_language_score >= 0.7:
+    if state.query_language_score is None or state.query_language_score >= 0.9:
         return "score_check_node"
     if state.awaiting_clarify:
         return "awaiting"
@@ -222,9 +228,9 @@ def route_language_node(state: MessageState) -> MessageState:
         return "fallback_node"
     
 def router_node(state: MessageState) -> MessageState:
-    print(" Router Node "+str(state))
+    # print(" Router Node "+str(state))
     response = router_chain.invoke({"question": state.question})
-    print(f"Router Response: {response}")
+    # print(f"Router Response: {response}")
     application = response['text'].application
     query_type = response['text'].query_type
     state.application = application
@@ -233,22 +239,22 @@ def router_node(state: MessageState) -> MessageState:
     return state
 
 def jpa_node(state: MessageState) -> MessageState:
-    print("jpa_node "+str(state))
+    # print("jpa_node "+str(state))
     relevant_docs = []
     for doc in state.retrieved_docs:
         relevant_docs.append(doc['content'])
-    print(relevant_docs)
+    # print(relevant_docs)
     response = model_chain.invoke({"question": state.question, 
                                    "context": "/n/n".join(relevant_docs),"human_input":""})
-    print("Response from model_chain:"+str(response))
+    # print("Response from model_chain:"+str(response))
     state.answer = response['text']
-    print(f"JPA Node Response: {state.answer}")
+    # print(f"JPA Node Response: {state.answer}")
     return state
 def sql_node(state: MessageState) -> MessageState:
-    print("sql_node "+str(state))
+    # print("sql_node "+str(state))
     response = sql_model_chain.invoke({"question": state.question})
     state.answer = response['answer']
-    print(f"SQL Node Response: {state.answer}")
+    # print(f"SQL Node Response: {state.answer}")
     return state
 
 def route_rag_score_node(state: MessageState) -> MessageState:
@@ -267,7 +273,7 @@ def jpa_query_retriever(question: str, k: int = 5):
     print(f"Retrieved {len(scored_docs)} documents for question: {question}")
     for doc in scored_docs:
         print(f"Document score: {doc['score']:.3f}")
-        print(doc['content'])
+        # print(doc['content'])
     return scored_docs
 
 def sql_query_retriever(question: str, k: int = 5):
@@ -276,7 +282,7 @@ def sql_query_retriever(question: str, k: int = 5):
     print(f"Total documents retrieved: {len(docs)}")
     # print(docs)
     scored_docs = [{"content": doc.page_content, "score": score} for doc, score in docs[:k]]
-    print(f"Retrieved {len(scored_docs)} documents for question: {question}")
+    # print(f"Retrieved {len(scored_docs)} documents for question: {question}")
     for doc in scored_docs:
         print(f"Document score: {doc['score']:.3f}")
         print(doc['content'])
@@ -315,7 +321,8 @@ def clarify_node(state: MessageState):
         state.awaiting_clarify = False
         return state
     print("[clarify_node] asking user for clarification (awaiting_clarify=True)"+str(state.clarify_prompt))
-    raw = input("User response: ")
+    # raw = input("User response: ")
+    raw = interrupt(state.clarify_prompt)
     # payload = {
     #     "prompt":state.clarify_prompt,
     #     "retry_count": state.retry_count,
