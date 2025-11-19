@@ -18,4 +18,3 @@ class MessageState(BaseModel):
     top_score: Optional[float] = Field(None, description="Top score from retrieved documents")
     retrieved_docs: Optional[List[Dict[str, Any]]] = Field(None, description="Documents retrieved from the vector store")
     history: Optional[List[Dict[str, str]]] = Field([], description="Conversation history")
-    
