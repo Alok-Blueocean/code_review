@@ -1,6 +1,7 @@
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from langchain_core.output_parsers import PydanticOutputParser
+from states import MessageState
 
 prompt_RAG = """
     You are an expert Java code reviewer and developer. I will provide you with a Java coding scenario, including a potential issue and relevant context. Your task is to:
