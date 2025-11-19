@@ -3,6 +3,8 @@ from vectorstore import retriever,chroma
 from chains import model_chain
 from pydantic import BaseModel,Field
 from typing import Optional, List
+from graph import graph_app
+from langgraph.types import Command
 
 class QueryRequest(BaseModel):
     query: str = Field(max_length=512, description="The query string to search for similar documents.")
@@ -46,6 +48,24 @@ async def get_similar_documents(query: QueryRequest):
 async def get_llm_response(query: str):
     try:
         response = model_chain({"question": query})
+        return response
+    except Exception as e:
+        print(f"Error occurred while getting LLM response: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+    
+@app.post("/graph")
+async def get_llm_response(query: str):
+    try:
+        response  = graph_app.invoke({"question": query}, config= {"configurable":{"thread_id":"2"}})
+        return response
+    except Exception as e:
+        print(f"Error occurred while getting LLM response: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.post("/resume")
+async def resume(response: str):
+    try:
+        response  = graph_app.invoke(Command(resume=response), config= {"configurable":{"thread_id":"2"}})
         return response
     except Exception as e:
         print(f"Error occurred while getting LLM response: {e}")
