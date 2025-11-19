@@ -3,6 +3,9 @@ from langchain.embeddings import HuggingFaceEmbeddings
 
 persist_directory = "./chroma_db"
 
+from huggingface_hub import login
+#login("")
+
 embeddings = HuggingFaceEmbeddings(model_name = 'BAAI/bge-large-en')
 
 chroma = Chroma(persist_directory=persist_directory,
