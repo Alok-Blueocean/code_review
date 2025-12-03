@@ -1,28 +1,20 @@
-from langchain.chains import LLMChain
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-from langchain.schema import SystemMessage, HumanMessage, AIMessage
 from states import MessageState
-from langchain.prompts import PromptTemplate
-from chains import model
+from chains import model, model_chain, sql_model_chain, router_chain
 from vectorstore import chroma, sql_chroma
-from chains import model_chain, sql_model_chain, router_chain
+from prompts import format_instructions
 from langgraph.types import Command, interrupt
 
 
-
-SYSTEM_PROMPT = (
-    "Be concise and include examples when helpful."
-)
+SYSTEM_PROMPT = "Be concise and include examples when helpful."
 
 def build_messages_from_history(state):
-    """
-    Convert state.history into a list of langchain message objects.
-    Expects state.history to be a list of dicts: {"role": "user"|"assistant", "content": "..."}
-    """
+    print("[FUNC START] build_messages_from_history")
     messages = [SystemMessage(content=SYSTEM_PROMPT)]
 
-    # include prior turns
     for turn in state.history:
         role = turn.get("role")
         content = turn.get("content", "")
@@ -30,182 +22,166 @@ def build_messages_from_history(state):
             messages.append(HumanMessage(content=content))
         elif role == "assistant":
             messages.append(AIMessage(content=content))
-        # optionally ignore system or other roles
 
-    # append the current user question as the latest human message
-    # Be careful not to duplicate: if you already appended the current question to history
-    # earlier, skip this append. Here we assume you haven't appended yet.
     messages.append(HumanMessage(content=state.question))
+    print("[FUNC END] build_messages_from_history")
     return messages
 
 def fallback_node(state: MessageState) -> MessageState:
-    # ensure current user message is recorded once in history (avoid double append)
+    print("[FUNC START] fallback_node")
     if not state.history or state.history[-1].get("content") != state.question:
         state.history.append({"role":"user","content": state.question})
 
     messages = build_messages_from_history(state)
-
-    # call the ChatGroq model with the conversation messages
-    response = model.invoke(messages)  # returns an AIMessage-like object
+    response = model.invoke(messages)
     state.answer = response.content
-
-    # append assistant reply to history
     state.history.append({"role":"assistant","content": state.answer})
+    print("[FUNC END] fallback_node")
     return state
 
-
 def get_request_language(state: MessageState) -> MessageState:
-    """
-    Determine the programming language of the request based on the user's question.
-    """
-
-    # print("get request language ....."+str(state))
-    print("2...........")
+    print("[FUNC START] get_request_language")
     parser = PydanticOutputParser(pydantic_object=MessageState)
     format_instructions = parser.get_format_instructions()
-    # print("Format instructions:"+str(format_instructions))
-    prompt = """
-    Classify the following question as either "JPA" if it is asking about Java code, "SQL" if it is asking about SQL code, or "unknown" if it is not clear.
-    Also provide a confidence score between 0 and 1 for your classification.
 
-    Please follow the JSON instructions exactly:
-    Question: "{question}"
+    prompt_text = """
+    Return only valid json, no explaination, no extra text
+
+    Classify the following question as either:
+    - "JPA"
+    - "SQL"
+    - "unknown"
+
+    Also provide a confidence score between 0 and 1.
+
+    Question: {question}
 
     {format_instructions}
     """
-    prompt_template = PromptTemplate(
-        input_variables=["question"],
-        template=prompt,
-        partial_variables={"format_instructions": format_instructions}
-    )
-    # Simulate LLM response
-    model.temperature = 0
-    model.max_tokens = 800
-    llm_chain = LLMChain(llm=model, prompt=prompt_template, 
-                    output_parser=parser)
-    response = llm_chain.invoke({"question": 
-                                 state.question})
-    state.query_type = response['text'].query_type
-    state.query_type_score = response['text'].query_type_score
-    state.query_language = response['text'].query_language
-    state.query_language_score = response['text'].query_language_score
-    print("Determined query language:", state.query_language, "with score:", state.query_language_score)
+
+    def escape_json(text: str) -> str:
+        return text.replace("{", "{{").replace("}", "}}")
+
+
+    prompt_template = ChatPromptTemplate.from_template(
+    prompt_text.replace("{format_instructions}", escape_json(format_instructions))
+)
+    print("here1")
+    chain = prompt_template | model | parser
+
+    response = chain.invoke({"question": state.question,"format_instructions":format_instructions})
+
+    state.query_type = response.query_type
+    state.query_type_score = response.query_type_score
+    state.query_language = response.query_language
+    state.query_language_score = response.query_language_score
+    print(f"[DEBUG] Determined query language: {state.query_language} with score: {state.query_language_score}")
+    print("[FUNC END] get_request_language")
     return state
 
 def clarify_query_language(state: MessageState) -> MessageState:
-    """
-    Clarify the query language if it is uncertain.
-    """
+    print("[FUNC START] clarify_query_language")
     state.awaiting_clarify = True
 
-    clarify_prompt = ("I couldn't determine whether your question is JPA or SQ. Could you please clarify?"
-                      "Respond with following options:"
-                      """- JPA
-- SQL""")
+    clarify_prompt = (
+        "I couldn't determine whether your question is JPA or SQL. Could you please clarify?"
+        "\nRespond with following options:\n- JPA\n- SQL"
+    )
     state.clarify_prompt = clarify_prompt
-    # payload = {
-    #     "prompt":clarify_prompt,
-    #     "retry_count": state.retry_count,
-    #     "max_retries": state.max_retries
-    # }
-    # print("Asking user for clarification:", clarify_prompt)
-    # raw = input("User response: ")
     raw = interrupt(clarify_prompt)
-    # refined = interrupt(payload)
-    # print(refined)
-    # raw = refined.payload.get("user_response","")
+
     if state.retry_count >= state.max_retries:
         print("Maximum retries reached. Proceeding without clarification.")
         state.query_language = "unknown"
         state.awaiting_clarify = False
+        print("[FUNC END] clarify_query_language")
         return state
+
     user_response = raw.strip().lower()
     if user_response == "jpa":
         state.query_language = "JPA"
     elif user_response == "sql":
         state.query_language = "SQL"
     else:
-        print("I did not understand your response. Please try again.")
+        print("I did not understand your response. Retrying...")
         if state.retry_count < state.max_retries:
             state.retry_count += 1
             state = clarify_query_language(state)
     state.awaiting_clarify = False
+    print("[FUNC END] clarify_query_language")
     return state
-    
 
 def get_request_type(state: MessageState) -> MessageState:
-    """
-    Determine the programming language of the request based on the user's question.
-    """
-
-    print("get request type ....."+str(state))
+    print("[FUNC START] get_request_type")
     parser = PydanticOutputParser(pydantic_object=MessageState)
     format_instructions = parser.get_format_instructions()
-    print("Format instructions:"+str(format_instructions))
-    prompt = """
-    Classify the following question as either "Summary" if it is asking about Summary, "Individual Issue" if it is asking about a specific issue, or "unknown" if it is not clear.
-    Also provide a confidence score between 0 and 1 for your classification.
-    Question: "{question}"
-    Follow the JSON instructions exactly:
+
+    prompt_text = """
+
+    return only valid json, no explaination, no extra text
+
+    Classify the following question as either:
+    - "Summary"
+    - "Individual Issue"
+    - "Unknown"
+
+    Also provide a confidence score 0–1.
+
+    Question: {question}
+
     {format_instructions}
     """
-    prompt_template = PromptTemplate(
-        input_variables=["question"],
-        template=prompt,
-        partial_variables={"format_instructions": format_instructions}
-    )
-    # Simulate LLM response
-    llm_chain = LLMChain(llm=model, prompt=prompt_template, 
-                    output_parser=parser)
-    print("get request type 2"+str(state))
-    response = llm_chain.invoke({"question": state.question})
-    state.query_type = response['text'].query_type
-    state.query_type_score = response['text'].query_type_score
-    state.query_language = response['text'].query_language
-    state.query_language_score = response['text'].query_language_score
-    print("get request type final"+str(state))
+    def escape_json(text: str) -> str:
+        return text.replace("{", "{{").replace("}", "}}")
+
+
+    prompt_template = ChatPromptTemplate.from_template(
+    prompt_text.replace("{format_instructions}", escape_json(format_instructions))
+)
+    print("here1")
+    chain = prompt_template | model | parser
+    print("here2")
+    response = chain.invoke({"question": state.question,"format_instructions":format_instructions})
+    print("here3"+str(response))
+    state.query_type = response.query_type
+    state.query_type_score = response.query_type_score
+    state.query_language = response.query_language
+    state.query_language_score = response.query_language_score
+    print("[FUNC END] get_request_type")
     return state
 
 def clarify_query_type(state: MessageState) -> MessageState:
-    """
-    Clarify the query language if it is uncertain.
-    """
-    print("clarify_query_type"+str(state))
+    print("[FUNC START] clarify_query_type")
     state.awaiting_clarify = True
 
-    clarify_prompt = ("I couldn't determine whether your question is asking for a summary or a specific issue. Could you please clarify?"
-                      "Respond with following options:"
-                      """- Summary
-- Individual Issue""")
+    clarify_prompt = (
+        "I couldn't determine whether your question is asking for a summary or a specific issue. "
+        "Please clarify. Respond with following options:\n- Summary\n- Individual Issue"
+    )
     state.clarify_prompt = clarify_prompt
-    print("Asking user for clarification:", clarify_prompt)
-    # raw = input("User response: ")
     raw = interrupt(clarify_prompt)
-    # payload = {
-    #     "prompt":clarify_prompt,
-    #     "retry_count": state.retry_count,
-    #     "max_retries": state.max_retries
-    # }
-    # refined = interrupt(payload)
-    # print(refined)
-    # raw = refined.payload.get("user_response","")
+
     if state.retry_count >= state.max_retries:
         print("Maximum retries reached. Exiting clarification.")
         state.awaiting_clarify = False
         state.query_type = "Unknown"
+        print("[FUNC END] clarify_query_type")
         return state
+
     user_response = raw.strip().lower()
     if user_response == "summary":
         state.query_type = "Summary"
     elif user_response == "individual issue":
         state.query_type = "Individual Issue"
     else:
-        print("I did not understand your response. Please try again.")
+        print("I did not understand your response. Retrying...")
         if state.retry_count < state.max_retries:
             state.retry_count += 1
             state = clarify_query_type(state)
     state.awaiting_clarify = False
+    print("[FUNC END] clarify_query_type")
     return state
+
     
 def route_query_node(state: MessageState) -> MessageState:
     if state.query_type_score is None or state.query_type_score < 0.9:
@@ -239,28 +215,31 @@ def router_node(state: MessageState) -> MessageState:
     return state
 
 def jpa_node(state: MessageState) -> MessageState:
-    # print("jpa_node "+str(state))
+    print("jpa_node "+str(state))
     relevant_docs = []
     for doc in state.retrieved_docs:
         relevant_docs.append(doc['content'])
-    # print(relevant_docs)
+    print(relevant_docs)
     response = model_chain.invoke({"question": state.question, 
                                    "context": "/n/n".join(relevant_docs),"human_input":""})
-    # print("Response from model_chain:"+str(response))
-    state.answer = response['text']
+    print("Response from model_chain:"+str(response))
+    state.answer = response.content
     # print(f"JPA Node Response: {state.answer}")
     return state
 def sql_node(state: MessageState) -> MessageState:
-    # print("sql_node "+str(state))
-    response = sql_model_chain.invoke({"question": state.question})
-    state.answer = response['answer']
-    # print(f"SQL Node Response: {state.answer}")
+    print("sql_node "+str(state))
+    response = sql_model_chain.invoke({"question": state.question,"context": "/n/n".join(relevant_docs),"human_input":""})
+    state.answer = response.content
+    print(f"SQL Node Response: {state.answer}")
     return state
 
 def route_rag_score_node(state: MessageState) -> MessageState:
+    print("Route rag score")
     if state.top_score >= 0.3:
+        print("Route rag score1")
         return state.query_language
     else:
+        print("Route rag score2")
         return "clarify"
 
 
@@ -293,7 +272,7 @@ def score_check_node(state: MessageState):
     if state.query_language == "JPA":
         docs = jpa_query_retriever(state.question, k=5)
     elif state.query_language == "SQL":
-        docs = jpa_query_retriever(state.question, k=5)
+        docs = sql_query_retriever(state.question, k=5)
     else:
         docs = sql_query_retriever(state.question, k=5)
     state.retrieved_docs = docs

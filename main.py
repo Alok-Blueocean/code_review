@@ -1,10 +1,20 @@
 from fastapi import FastAPI, HTTPException
-from vectorstore import retriever,chroma
-from chains import model_chain
 from pydantic import BaseModel,Field
 from typing import Optional, List
-from graph import graph_app
-from langgraph.types import Command
+
+from vectorstore import retriever,chroma
+# from chains import model_chain
+# from graph import graph_app
+# from langgraph.types import Command
+
+
+from uuid import uuid4
+
+# use a meaningful session id (could be uuid4(), user id, conversation id, etc.)
+session_id = str(uuid4())        # or "user-123" / "thread-2" etc.
+
+config = {"configurable": {"session_id": session_id, "thread_id": "2"}}
+
 
 class QueryRequest(BaseModel):
     query: str = Field(max_length=512, description="The query string to search for similar documents.")
@@ -56,7 +66,7 @@ async def get_llm_response(query: str):
 @app.post("/graph")
 async def get_llm_response(query: str):
     try:
-        response  = graph_app.invoke({"question": query}, config= {"configurable":{"thread_id":"2"}})
+        response  = graph_app.invoke({"question": query}, config= config)
         return response
     except Exception as e:
         print(f"Error occurred while getting LLM response: {e}")
@@ -65,7 +75,7 @@ async def get_llm_response(query: str):
 @app.post("/resume")
 async def resume(response: str):
     try:
-        response  = graph_app.invoke(Command(resume=response), config= {"configurable":{"thread_id":"2"}})
+        response  = graph_app.invoke(Command(resume=response), config= config)
         return response
     except Exception as e:
         print(f"Error occurred while getting LLM response: {e}")

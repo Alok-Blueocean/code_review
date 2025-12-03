@@ -16,3 +16,8 @@ LANGCHAIN_VERBOSE = "false"
 
 os.environ["LANGCHAIN_DEBUG"] = "false"
 os.environ["LANGCHAIN_VERBOSE"] = "false"
+
+print(LANGCHAIN_API_KEY)
+print(LANGCHAIN_TRACING_V2)
+print(LANGCHAIN_PROJECT)
+print(groq_api_key)
